@@ -1,941 +1,574 @@
-/**
- * React Router v6.3.0
- *
- * Copyright (c) Remix Software Inc.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE.md file in the root directory of this source tree.
- *
- * @license MIT
- */
-import { parsePath, createMemoryHistory, Action } from 'history';
-export { Action as NavigationType, createPath, parsePath } from 'history';
-import { createContext, useContext, useMemo, useRef, useEffect, useCallback, createElement, useState, useLayoutEffect, Children, isValidElement, Fragment } from 'react';
+var url = require("url");
+var URL = url.URL;
+var http = require("http");
+var https = require("https");
+var Writable = require("stream").Writable;
+var assert = require("assert");
+var debug = require("./debug");
 
-const NavigationContext = /*#__PURE__*/createContext(null);
-
-if (process.env.NODE_ENV !== "production") {
-  NavigationContext.displayName = "Navigation";
-}
-
-const LocationContext = /*#__PURE__*/createContext(null);
-
-if (process.env.NODE_ENV !== "production") {
-  LocationContext.displayName = "Location";
-}
-
-const RouteContext = /*#__PURE__*/createContext({
-  outlet: null,
-  matches: []
+// Create handlers that pass events from native requests
+var events = ["abort", "aborted", "connect", "error", "socket", "timeout"];
+var eventHandlers = Object.create(null);
+events.forEach(function (event) {
+  eventHandlers[event] = function (arg1, arg2, arg3) {
+    this._redirectable.emit(event, arg1, arg2, arg3);
+  };
 });
 
-if (process.env.NODE_ENV !== "production") {
-  RouteContext.displayName = "Route";
-}
+// Error types with codes
+var RedirectionError = createErrorType(
+  "ERR_FR_REDIRECTION_FAILURE",
+  "Redirected request failed"
+);
+var TooManyRedirectsError = createErrorType(
+  "ERR_FR_TOO_MANY_REDIRECTS",
+  "Maximum number of redirects exceeded"
+);
+var MaxBodyLengthExceededError = createErrorType(
+  "ERR_FR_MAX_BODY_LENGTH_EXCEEDED",
+  "Request body larger than maxBodyLength limit"
+);
+var WriteAfterEndError = createErrorType(
+  "ERR_STREAM_WRITE_AFTER_END",
+  "write after end"
+);
 
-function invariant(cond, message) {
-  if (!cond) throw new Error(message);
-}
-function warning(cond, message) {
-  if (!cond) {
-    // eslint-disable-next-line no-console
-    if (typeof console !== "undefined") console.warn(message);
+// An HTTP(S) request that can be redirected
+function RedirectableRequest(options, responseCallback) {
+  // Initialize the request
+  Writable.call(this);
+  this._sanitizeOptions(options);
+  this._options = options;
+  this._ended = false;
+  this._ending = false;
+  this._redirectCount = 0;
+  this._redirects = [];
+  this._requestBodyLength = 0;
+  this._requestBodyBuffers = [];
 
-    try {
-      // Welcome to debugging React Router!
-      //
-      // This error is thrown as a convenience so you can more easily
-      // find the source for a warning that appears in the console by
-      // enabling "pause on exceptions" in your JavaScript debugger.
-      throw new Error(message); // eslint-disable-next-line no-empty
-    } catch (e) {}
-  }
-}
-const alreadyWarned = {};
-function warningOnce(key, cond, message) {
-  if (!cond && !alreadyWarned[key]) {
-    alreadyWarned[key] = true;
-    process.env.NODE_ENV !== "production" ? warning(false, message) : void 0;
-  }
-}
-
-/**
- * Returns a path with params interpolated.
- *
- * @see https://reactrouter.com/docs/en/v6/api#generatepath
- */
-function generatePath(path, params) {
-  if (params === void 0) {
-    params = {};
+  // Attach a callback if passed
+  if (responseCallback) {
+    this.on("response", responseCallback);
   }
 
-  return path.replace(/:(\w+)/g, (_, key) => {
-    !(params[key] != null) ? process.env.NODE_ENV !== "production" ? invariant(false, "Missing \":" + key + "\" param") : invariant(false) : void 0;
-    return params[key];
-  }).replace(/\/*\*$/, _ => params["*"] == null ? "" : params["*"].replace(/^\/*/, "/"));
-}
-/**
- * A RouteMatch contains info about how a route matched a URL.
- */
-
-/**
- * Matches the given routes to a location and returns the match data.
- *
- * @see https://reactrouter.com/docs/en/v6/api#matchroutes
- */
-function matchRoutes(routes, locationArg, basename) {
-  if (basename === void 0) {
-    basename = "/";
-  }
-
-  let location = typeof locationArg === "string" ? parsePath(locationArg) : locationArg;
-  let pathname = stripBasename(location.pathname || "/", basename);
-
-  if (pathname == null) {
-    return null;
-  }
-
-  let branches = flattenRoutes(routes);
-  rankRouteBranches(branches);
-  let matches = null;
-
-  for (let i = 0; matches == null && i < branches.length; ++i) {
-    matches = matchRouteBranch(branches[i], pathname);
-  }
-
-  return matches;
-}
-
-function flattenRoutes(routes, branches, parentsMeta, parentPath) {
-  if (branches === void 0) {
-    branches = [];
-  }
-
-  if (parentsMeta === void 0) {
-    parentsMeta = [];
-  }
-
-  if (parentPath === void 0) {
-    parentPath = "";
-  }
-
-  routes.forEach((route, index) => {
-    let meta = {
-      relativePath: route.path || "",
-      caseSensitive: route.caseSensitive === true,
-      childrenIndex: index,
-      route
-    };
-
-    if (meta.relativePath.startsWith("/")) {
-      !meta.relativePath.startsWith(parentPath) ? process.env.NODE_ENV !== "production" ? invariant(false, "Absolute route path \"" + meta.relativePath + "\" nested under path " + ("\"" + parentPath + "\" is not valid. An absolute child route path ") + "must start with the combined path of all its parent routes.") : invariant(false) : void 0;
-      meta.relativePath = meta.relativePath.slice(parentPath.length);
-    }
-
-    let path = joinPaths([parentPath, meta.relativePath]);
-    let routesMeta = parentsMeta.concat(meta); // Add the children before adding this route to the array so we traverse the
-    // route tree depth-first and child routes appear before their parents in
-    // the "flattened" version.
-
-    if (route.children && route.children.length > 0) {
-      !(route.index !== true) ? process.env.NODE_ENV !== "production" ? invariant(false, "Index routes must not have child routes. Please remove " + ("all child routes from route path \"" + path + "\".")) : invariant(false) : void 0;
-      flattenRoutes(route.children, branches, routesMeta, path);
-    } // Routes without a path shouldn't ever match by themselves unless they are
-    // index routes, so don't add them to the list of possible branches.
-
-
-    if (route.path == null && !route.index) {
-      return;
-    }
-
-    branches.push({
-      path,
-      score: computeScore(path, route.index),
-      routesMeta
-    });
-  });
-  return branches;
-}
-
-function rankRouteBranches(branches) {
-  branches.sort((a, b) => a.score !== b.score ? b.score - a.score // Higher score first
-  : compareIndexes(a.routesMeta.map(meta => meta.childrenIndex), b.routesMeta.map(meta => meta.childrenIndex)));
-}
-
-const paramRe = /^:\w+$/;
-const dynamicSegmentValue = 3;
-const indexRouteValue = 2;
-const emptySegmentValue = 1;
-const staticSegmentValue = 10;
-const splatPenalty = -2;
-
-const isSplat = s => s === "*";
-
-function computeScore(path, index) {
-  let segments = path.split("/");
-  let initialScore = segments.length;
-
-  if (segments.some(isSplat)) {
-    initialScore += splatPenalty;
-  }
-
-  if (index) {
-    initialScore += indexRouteValue;
-  }
-
-  return segments.filter(s => !isSplat(s)).reduce((score, segment) => score + (paramRe.test(segment) ? dynamicSegmentValue : segment === "" ? emptySegmentValue : staticSegmentValue), initialScore);
-}
-
-function compareIndexes(a, b) {
-  let siblings = a.length === b.length && a.slice(0, -1).every((n, i) => n === b[i]);
-  return siblings ? // If two routes are siblings, we should try to match the earlier sibling
-  // first. This allows people to have fine-grained control over the matching
-  // behavior by simply putting routes with identical paths in the order they
-  // want them tried.
-  a[a.length - 1] - b[b.length - 1] : // Otherwise, it doesn't really make sense to rank non-siblings by index,
-  // so they sort equally.
-  0;
-}
-
-function matchRouteBranch(branch, pathname) {
-  let {
-    routesMeta
-  } = branch;
-  let matchedParams = {};
-  let matchedPathname = "/";
-  let matches = [];
-
-  for (let i = 0; i < routesMeta.length; ++i) {
-    let meta = routesMeta[i];
-    let end = i === routesMeta.length - 1;
-    let remainingPathname = matchedPathname === "/" ? pathname : pathname.slice(matchedPathname.length) || "/";
-    let match = matchPath({
-      path: meta.relativePath,
-      caseSensitive: meta.caseSensitive,
-      end
-    }, remainingPathname);
-    if (!match) return null;
-    Object.assign(matchedParams, match.params);
-    let route = meta.route;
-    matches.push({
-      params: matchedParams,
-      pathname: joinPaths([matchedPathname, match.pathname]),
-      pathnameBase: normalizePathname(joinPaths([matchedPathname, match.pathnameBase])),
-      route
-    });
-
-    if (match.pathnameBase !== "/") {
-      matchedPathname = joinPaths([matchedPathname, match.pathnameBase]);
-    }
-  }
-
-  return matches;
-}
-/**
- * A PathPattern is used to match on some portion of a URL pathname.
- */
-
-
-/**
- * Performs pattern matching on a URL pathname and returns information about
- * the match.
- *
- * @see https://reactrouter.com/docs/en/v6/api#matchpath
- */
-function matchPath(pattern, pathname) {
-  if (typeof pattern === "string") {
-    pattern = {
-      path: pattern,
-      caseSensitive: false,
-      end: true
-    };
-  }
-
-  let [matcher, paramNames] = compilePath(pattern.path, pattern.caseSensitive, pattern.end);
-  let match = pathname.match(matcher);
-  if (!match) return null;
-  let matchedPathname = match[0];
-  let pathnameBase = matchedPathname.replace(/(.)\/+$/, "$1");
-  let captureGroups = match.slice(1);
-  let params = paramNames.reduce((memo, paramName, index) => {
-    // We need to compute the pathnameBase here using the raw splat value
-    // instead of using params["*"] later because it will be decoded then
-    if (paramName === "*") {
-      let splatValue = captureGroups[index] || "";
-      pathnameBase = matchedPathname.slice(0, matchedPathname.length - splatValue.length).replace(/(.)\/+$/, "$1");
-    }
-
-    memo[paramName] = safelyDecodeURIComponent(captureGroups[index] || "", paramName);
-    return memo;
-  }, {});
-  return {
-    params,
-    pathname: matchedPathname,
-    pathnameBase,
-    pattern
+  // React to responses of native requests
+  var self = this;
+  this._onNativeResponse = function (response) {
+    self._processResponse(response);
   };
+
+  // Perform the first request
+  this._performRequest();
 }
+RedirectableRequest.prototype = Object.create(Writable.prototype);
 
-function compilePath(path, caseSensitive, end) {
-  if (caseSensitive === void 0) {
-    caseSensitive = false;
+RedirectableRequest.prototype.abort = function () {
+  abortRequest(this._currentRequest);
+  this.emit("abort");
+};
+
+// Writes buffered data to the current native request
+RedirectableRequest.prototype.write = function (data, encoding, callback) {
+  // Writing is not allowed if end has been called
+  if (this._ending) {
+    throw new WriteAfterEndError();
   }
 
-  if (end === void 0) {
-    end = true;
+  // Validate input and shift parameters if necessary
+  if (!(typeof data === "string" || typeof data === "object" && ("length" in data))) {
+    throw new TypeError("data should be a string, Buffer or Uint8Array");
+  }
+  if (typeof encoding === "function") {
+    callback = encoding;
+    encoding = null;
   }
 
-  process.env.NODE_ENV !== "production" ? warning(path === "*" || !path.endsWith("*") || path.endsWith("/*"), "Route path \"" + path + "\" will be treated as if it were " + ("\"" + path.replace(/\*$/, "/*") + "\" because the `*` character must ") + "always follow a `/` in the pattern. To get rid of this warning, " + ("please change the route path to \"" + path.replace(/\*$/, "/*") + "\".")) : void 0;
-  let paramNames = [];
-  let regexpSource = "^" + path.replace(/\/*\*?$/, "") // Ignore trailing / and /*, we'll handle it below
-  .replace(/^\/*/, "/") // Make sure it has a leading /
-  .replace(/[\\.*+^$?{}|()[\]]/g, "\\$&") // Escape special regex chars
-  .replace(/:(\w+)/g, (_, paramName) => {
-    paramNames.push(paramName);
-    return "([^\\/]+)";
+  // Ignore empty buffers, since writing them doesn't invoke the callback
+  // https://github.com/nodejs/node/issues/22066
+  if (data.length === 0) {
+    if (callback) {
+      callback();
+    }
+    return;
+  }
+  // Only write when we don't exceed the maximum body length
+  if (this._requestBodyLength + data.length <= this._options.maxBodyLength) {
+    this._requestBodyLength += data.length;
+    this._requestBodyBuffers.push({ data: data, encoding: encoding });
+    this._currentRequest.write(data, encoding, callback);
+  }
+  // Error when we exceed the maximum body length
+  else {
+    this.emit("error", new MaxBodyLengthExceededError());
+    this.abort();
+  }
+};
+
+// Ends the current native request
+RedirectableRequest.prototype.end = function (data, encoding, callback) {
+  // Shift parameters if necessary
+  if (typeof data === "function") {
+    callback = data;
+    data = encoding = null;
+  }
+  else if (typeof encoding === "function") {
+    callback = encoding;
+    encoding = null;
+  }
+
+  // Write data if needed and end
+  if (!data) {
+    this._ended = this._ending = true;
+    this._currentRequest.end(null, null, callback);
+  }
+  else {
+    var self = this;
+    var currentRequest = this._currentRequest;
+    this.write(data, encoding, function () {
+      self._ended = true;
+      currentRequest.end(null, null, callback);
+    });
+    this._ending = true;
+  }
+};
+
+// Sets a header value on the current native request
+RedirectableRequest.prototype.setHeader = function (name, value) {
+  this._options.headers[name] = value;
+  this._currentRequest.setHeader(name, value);
+};
+
+// Clears a header value on the current native request
+RedirectableRequest.prototype.removeHeader = function (name) {
+  delete this._options.headers[name];
+  this._currentRequest.removeHeader(name);
+};
+
+// Global timeout for all underlying requests
+RedirectableRequest.prototype.setTimeout = function (msecs, callback) {
+  var self = this;
+
+  // Destroys the socket on timeout
+  function destroyOnTimeout(socket) {
+    socket.setTimeout(msecs);
+    socket.removeListener("timeout", socket.destroy);
+    socket.addListener("timeout", socket.destroy);
+  }
+
+  // Sets up a timer to trigger a timeout event
+  function startTimer(socket) {
+    if (self._timeout) {
+      clearTimeout(self._timeout);
+    }
+    self._timeout = setTimeout(function () {
+      self.emit("timeout");
+      clearTimer();
+    }, msecs);
+    destroyOnTimeout(socket);
+  }
+
+  // Stops a timeout from triggering
+  function clearTimer() {
+    // Clear the timeout
+    if (self._timeout) {
+      clearTimeout(self._timeout);
+      self._timeout = null;
+    }
+
+    // Clean up all attached listeners
+    self.removeListener("abort", clearTimer);
+    self.removeListener("error", clearTimer);
+    self.removeListener("response", clearTimer);
+    if (callback) {
+      self.removeListener("timeout", callback);
+    }
+    if (!self.socket) {
+      self._currentRequest.removeListener("socket", startTimer);
+    }
+  }
+
+  // Attach callback if passed
+  if (callback) {
+    this.on("timeout", callback);
+  }
+
+  // Start the timer if or when the socket is opened
+  if (this.socket) {
+    startTimer(this.socket);
+  }
+  else {
+    this._currentRequest.once("socket", startTimer);
+  }
+
+  // Clean up on events
+  this.on("socket", destroyOnTimeout);
+  this.on("abort", clearTimer);
+  this.on("error", clearTimer);
+  this.on("response", clearTimer);
+
+  return this;
+};
+
+// Proxy all other public ClientRequest methods
+[
+  "flushHeaders", "getHeader",
+  "setNoDelay", "setSocketKeepAlive",
+].forEach(function (method) {
+  RedirectableRequest.prototype[method] = function (a, b) {
+    return this._currentRequest[method](a, b);
+  };
+});
+
+// Proxy all public ClientRequest properties
+["aborted", "connection", "socket"].forEach(function (property) {
+  Object.defineProperty(RedirectableRequest.prototype, property, {
+    get: function () { return this._currentRequest[property]; },
   });
+});
 
-  if (path.endsWith("*")) {
-    paramNames.push("*");
-    regexpSource += path === "*" || path === "/*" ? "(.*)$" // Already matched the initial /, just match the rest
-    : "(?:\\/(.+)|\\/*)$"; // Don't include the / in params["*"]
-  } else {
-    regexpSource += end ? "\\/*$" // When matching to the end, ignore trailing slashes
-    : // Otherwise, match a word boundary or a proceeding /. The word boundary restricts
-    // parent routes to matching only their own words and nothing more, e.g. parent
-    // route "/home" should not match "/home2".
-    // Additionally, allow paths starting with `.`, `-`, `~`, and url-encoded entities,
-    // but do not consume the character in the matched path so they can match against
-    // nested paths.
-    "(?:(?=[.~-]|%[0-9A-F]{2})|\\b|\\/|$)";
+RedirectableRequest.prototype._sanitizeOptions = function (options) {
+  // Ensure headers are always present
+  if (!options.headers) {
+    options.headers = {};
   }
 
-  let matcher = new RegExp(regexpSource, caseSensitive ? undefined : "i");
-  return [matcher, paramNames];
-}
+  // Since http.request treats host as an alias of hostname,
+  // but the url module interprets host as hostname plus port,
+  // eliminate the host property to avoid confusion.
+  if (options.host) {
+    // Use hostname if set, because it has precedence
+    if (!options.hostname) {
+      options.hostname = options.host;
+    }
+    delete options.host;
+  }
 
-function safelyDecodeURIComponent(value, paramName) {
+  // Complete the URL object when necessary
+  if (!options.pathname && options.path) {
+    var searchPos = options.path.indexOf("?");
+    if (searchPos < 0) {
+      options.pathname = options.path;
+    }
+    else {
+      options.pathname = options.path.substring(0, searchPos);
+      options.search = options.path.substring(searchPos);
+    }
+  }
+};
+
+
+// Executes the next native request (initial or redirect)
+RedirectableRequest.prototype._performRequest = function () {
+  // Load the native protocol
+  var protocol = this._options.protocol;
+  var nativeProtocol = this._options.nativeProtocols[protocol];
+  if (!nativeProtocol) {
+    this.emit("error", new TypeError("Unsupported protocol " + protocol));
+    return;
+  }
+
+  // If specified, use the agent corresponding to the protocol
+  // (HTTP and HTTPS use different types of agents)
+  if (this._options.agents) {
+    var scheme = protocol.substr(0, protocol.length - 1);
+    this._options.agent = this._options.agents[scheme];
+  }
+
+  // Create the native request
+  var request = this._currentRequest =
+        nativeProtocol.request(this._options, this._onNativeResponse);
+  this._currentUrl = url.format(this._options);
+
+  // Set up event handlers
+  request._redirectable = this;
+  for (var e = 0; e < events.length; e++) {
+    request.on(events[e], eventHandlers[events[e]]);
+  }
+
+  // End a redirected request
+  // (The first request must be ended explicitly with RedirectableRequest#end)
+  if (this._isRedirect) {
+    // Write the request entity and end.
+    var i = 0;
+    var self = this;
+    var buffers = this._requestBodyBuffers;
+    (function writeNext(error) {
+      // Only write if this request has not been redirected yet
+      /* istanbul ignore else */
+      if (request === self._currentRequest) {
+        // Report any write errors
+        /* istanbul ignore if */
+        if (error) {
+          self.emit("error", error);
+        }
+        // Write the next buffer if there are still left
+        else if (i < buffers.length) {
+          var buffer = buffers[i++];
+          /* istanbul ignore else */
+          if (!request.finished) {
+            request.write(buffer.data, buffer.encoding, writeNext);
+          }
+        }
+        // End the request if `end` has been called on us
+        else if (self._ended) {
+          request.end();
+        }
+      }
+    }());
+  }
+};
+
+// Processes a response from the current native request
+RedirectableRequest.prototype._processResponse = function (response) {
+  // Store the redirected response
+  var statusCode = response.statusCode;
+  if (this._options.trackRedirects) {
+    this._redirects.push({
+      url: this._currentUrl,
+      headers: response.headers,
+      statusCode: statusCode,
+    });
+  }
+
+  // RFC7231§6.4: The 3xx (Redirection) class of status code indicates
+  // that further action needs to be taken by the user agent in order to
+  // fulfill the request. If a Location header field is provided,
+  // the user agent MAY automatically redirect its request to the URI
+  // referenced by the Location field value,
+  // even if the specific status code is not understood.
+
+  // If the response is not a redirect; return it as-is
+  var location = response.headers.location;
+  if (!location || this._options.followRedirects === false ||
+      statusCode < 300 || statusCode >= 400) {
+    response.responseUrl = this._currentUrl;
+    response.redirects = this._redirects;
+    this.emit("response", response);
+
+    // Clean up
+    this._requestBodyBuffers = [];
+    return;
+  }
+
+  // The response is a redirect, so abort the current request
+  abortRequest(this._currentRequest);
+  // Discard the remainder of the response to avoid waiting for data
+  response.destroy();
+
+  // RFC7231§6.4: A client SHOULD detect and intervene
+  // in cyclical redirections (i.e., "infinite" redirection loops).
+  if (++this._redirectCount > this._options.maxRedirects) {
+    this.emit("error", new TooManyRedirectsError());
+    return;
+  }
+
+  // RFC7231§6.4: Automatic redirection needs to done with
+  // care for methods not known to be safe, […]
+  // RFC7231§6.4.2–3: For historical reasons, a user agent MAY change
+  // the request method from POST to GET for the subsequent request.
+  if ((statusCode === 301 || statusCode === 302) && this._options.method === "POST" ||
+      // RFC7231§6.4.4: The 303 (See Other) status code indicates that
+      // the server is redirecting the user agent to a different resource […]
+      // A user agent can perform a retrieval request targeting that URI
+      // (a GET or HEAD request if using HTTP) […]
+      (statusCode === 303) && !/^(?:GET|HEAD)$/.test(this._options.method)) {
+    this._options.method = "GET";
+    // Drop a possible entity and headers related to it
+    this._requestBodyBuffers = [];
+    removeMatchingHeaders(/^content-/i, this._options.headers);
+  }
+
+  // Drop the Host header, as the redirect might lead to a different host
+  var currentHostHeader = removeMatchingHeaders(/^host$/i, this._options.headers);
+
+  // If the redirect is relative, carry over the host of the last request
+  var currentUrlParts = url.parse(this._currentUrl);
+  var currentHost = currentHostHeader || currentUrlParts.host;
+  var currentUrl = /^\w+:/.test(location) ? this._currentUrl :
+    url.format(Object.assign(currentUrlParts, { host: currentHost }));
+
+  // Determine the URL of the redirection
+  var redirectUrl;
   try {
-    return decodeURIComponent(value);
-  } catch (error) {
-    process.env.NODE_ENV !== "production" ? warning(false, "The value for the URL param \"" + paramName + "\" will not be decoded because" + (" the string \"" + value + "\" is a malformed URL segment. This is probably") + (" due to a bad percent encoding (" + error + ").")) : void 0;
-    return value;
+    redirectUrl = url.resolve(currentUrl, location);
   }
-}
-/**
- * Returns a resolved path object relative to the given pathname.
- *
- * @see https://reactrouter.com/docs/en/v6/api#resolvepath
- */
-
-
-function resolvePath(to, fromPathname) {
-  if (fromPathname === void 0) {
-    fromPathname = "/";
+  catch (cause) {
+    this.emit("error", new RedirectionError(cause));
+    return;
   }
 
-  let {
-    pathname: toPathname,
-    search = "",
-    hash = ""
-  } = typeof to === "string" ? parsePath(to) : to;
-  let pathname = toPathname ? toPathname.startsWith("/") ? toPathname : resolvePathname(toPathname, fromPathname) : fromPathname;
-  return {
-    pathname,
-    search: normalizeSearch(search),
-    hash: normalizeHash(hash)
+  // Create the redirected request
+  debug("redirecting to", redirectUrl);
+  this._isRedirect = true;
+  var redirectUrlParts = url.parse(redirectUrl);
+  Object.assign(this._options, redirectUrlParts);
+
+  // Drop confidential headers when redirecting to a less secure protocol
+  // or to a different domain that is not a superdomain
+  if (redirectUrlParts.protocol !== currentUrlParts.protocol &&
+     redirectUrlParts.protocol !== "https:" ||
+     redirectUrlParts.host !== currentHost &&
+     !isSubdomain(redirectUrlParts.host, currentHost)) {
+    removeMatchingHeaders(/^(?:authorization|cookie)$/i, this._options.headers);
+  }
+
+  // Evaluate the beforeRedirect callback
+  if (typeof this._options.beforeRedirect === "function") {
+    var responseDetails = { headers: response.headers };
+    try {
+      this._options.beforeRedirect.call(null, this._options, responseDetails);
+    }
+    catch (err) {
+      this.emit("error", err);
+      return;
+    }
+    this._sanitizeOptions(this._options);
+  }
+
+  // Perform the redirected request
+  try {
+    this._performRequest();
+  }
+  catch (cause) {
+    this.emit("error", new RedirectionError(cause));
+  }
+};
+
+// Wraps the key/value object of protocols with redirect functionality
+function wrap(protocols) {
+  // Default settings
+  var exports = {
+    maxRedirects: 21,
+    maxBodyLength: 10 * 1024 * 1024,
   };
-}
 
-function resolvePathname(relativePath, fromPathname) {
-  let segments = fromPathname.replace(/\/+$/, "").split("/");
-  let relativeSegments = relativePath.split("/");
-  relativeSegments.forEach(segment => {
-    if (segment === "..") {
-      // Keep the root "" segment so the pathname starts at /
-      if (segments.length > 1) segments.pop();
-    } else if (segment !== ".") {
-      segments.push(segment);
-    }
-  });
-  return segments.length > 1 ? segments.join("/") : "/";
-}
+  // Wrap each protocol
+  var nativeProtocols = {};
+  Object.keys(protocols).forEach(function (scheme) {
+    var protocol = scheme + ":";
+    var nativeProtocol = nativeProtocols[protocol] = protocols[scheme];
+    var wrappedProtocol = exports[scheme] = Object.create(nativeProtocol);
 
-function resolveTo(toArg, routePathnames, locationPathname) {
-  let to = typeof toArg === "string" ? parsePath(toArg) : toArg;
-  let toPathname = toArg === "" || to.pathname === "" ? "/" : to.pathname; // If a pathname is explicitly provided in `to`, it should be relative to the
-  // route context. This is explained in `Note on `<Link to>` values` in our
-  // migration guide from v5 as a means of disambiguation between `to` values
-  // that begin with `/` and those that do not. However, this is problematic for
-  // `to` values that do not provide a pathname. `to` can simply be a search or
-  // hash string, in which case we should assume that the navigation is relative
-  // to the current location's pathname and *not* the route pathname.
-
-  let from;
-
-  if (toPathname == null) {
-    from = locationPathname;
-  } else {
-    let routePathnameIndex = routePathnames.length - 1;
-
-    if (toPathname.startsWith("..")) {
-      let toSegments = toPathname.split("/"); // Each leading .. segment means "go up one route" instead of "go up one
-      // URL segment".  This is a key difference from how <a href> works and a
-      // major reason we call this a "to" value instead of a "href".
-
-      while (toSegments[0] === "..") {
-        toSegments.shift();
-        routePathnameIndex -= 1;
+    // Executes a request, following redirects
+    function request(input, options, callback) {
+      // Parse parameters
+      if (typeof input === "string") {
+        var urlStr = input;
+        try {
+          input = urlToOptions(new URL(urlStr));
+        }
+        catch (err) {
+          /* istanbul ignore next */
+          input = url.parse(urlStr);
+        }
+      }
+      else if (URL && (input instanceof URL)) {
+        input = urlToOptions(input);
+      }
+      else {
+        callback = options;
+        options = input;
+        input = { protocol: protocol };
+      }
+      if (typeof options === "function") {
+        callback = options;
+        options = null;
       }
 
-      to.pathname = toSegments.join("/");
-    } // If there are more ".." segments than parent routes, resolve relative to
-    // the root / URL.
+      // Set defaults
+      options = Object.assign({
+        maxRedirects: exports.maxRedirects,
+        maxBodyLength: exports.maxBodyLength,
+      }, input, options);
+      options.nativeProtocols = nativeProtocols;
 
-
-    from = routePathnameIndex >= 0 ? routePathnames[routePathnameIndex] : "/";
-  }
-
-  let path = resolvePath(to, from); // Ensure the pathname has a trailing slash if the original to value had one.
-
-  if (toPathname && toPathname !== "/" && toPathname.endsWith("/") && !path.pathname.endsWith("/")) {
-    path.pathname += "/";
-  }
-
-  return path;
-}
-function getToPathname(to) {
-  // Empty strings should be treated the same as / paths
-  return to === "" || to.pathname === "" ? "/" : typeof to === "string" ? parsePath(to).pathname : to.pathname;
-}
-function stripBasename(pathname, basename) {
-  if (basename === "/") return pathname;
-
-  if (!pathname.toLowerCase().startsWith(basename.toLowerCase())) {
-    return null;
-  }
-
-  let nextChar = pathname.charAt(basename.length);
-
-  if (nextChar && nextChar !== "/") {
-    // pathname does not start with basename/
-    return null;
-  }
-
-  return pathname.slice(basename.length) || "/";
-}
-const joinPaths = paths => paths.join("/").replace(/\/\/+/g, "/");
-const normalizePathname = pathname => pathname.replace(/\/+$/, "").replace(/^\/*/, "/");
-
-const normalizeSearch = search => !search || search === "?" ? "" : search.startsWith("?") ? search : "?" + search;
-
-const normalizeHash = hash => !hash || hash === "#" ? "" : hash.startsWith("#") ? hash : "#" + hash;
-
-/**
- * Returns the full href for the given "to" value. This is useful for building
- * custom links that are also accessible and preserve right-click behavior.
- *
- * @see https://reactrouter.com/docs/en/v6/api#usehref
- */
-
-function useHref(to) {
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of the
-  // router loaded. We can help them understand how to avoid that.
-  "useHref() may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  let {
-    basename,
-    navigator
-  } = useContext(NavigationContext);
-  let {
-    hash,
-    pathname,
-    search
-  } = useResolvedPath(to);
-  let joinedPathname = pathname;
-
-  if (basename !== "/") {
-    let toPathname = getToPathname(to);
-    let endsWithSlash = toPathname != null && toPathname.endsWith("/");
-    joinedPathname = pathname === "/" ? basename + (endsWithSlash ? "/" : "") : joinPaths([basename, pathname]);
-  }
-
-  return navigator.createHref({
-    pathname: joinedPathname,
-    search,
-    hash
-  });
-}
-/**
- * Returns true if this component is a descendant of a <Router>.
- *
- * @see https://reactrouter.com/docs/en/v6/api#useinroutercontext
- */
-
-function useInRouterContext() {
-  return useContext(LocationContext) != null;
-}
-/**
- * Returns the current location object, which represents the current URL in web
- * browsers.
- *
- * Note: If you're using this it may mean you're doing some of your own
- * "routing" in your app, and we'd like to know what your use case is. We may
- * be able to provide something higher-level to better suit your needs.
- *
- * @see https://reactrouter.com/docs/en/v6/api#uselocation
- */
-
-function useLocation() {
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of the
-  // router loaded. We can help them understand how to avoid that.
-  "useLocation() may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  return useContext(LocationContext).location;
-}
-/**
- * Returns the current navigation action which describes how the router came to
- * the current location, either by a pop, push, or replace on the history stack.
- *
- * @see https://reactrouter.com/docs/en/v6/api#usenavigationtype
- */
-
-function useNavigationType() {
-  return useContext(LocationContext).navigationType;
-}
-/**
- * Returns true if the URL for the given "to" value matches the current URL.
- * This is useful for components that need to know "active" state, e.g.
- * <NavLink>.
- *
- * @see https://reactrouter.com/docs/en/v6/api#usematch
- */
-
-function useMatch(pattern) {
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of the
-  // router loaded. We can help them understand how to avoid that.
-  "useMatch() may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  let {
-    pathname
-  } = useLocation();
-  return useMemo(() => matchPath(pattern, pathname), [pathname, pattern]);
-}
-/**
- * The interface for the navigate() function returned from useNavigate().
- */
-
-/**
- * Returns an imperative method for changing the location. Used by <Link>s, but
- * may also be used by other elements to change the location.
- *
- * @see https://reactrouter.com/docs/en/v6/api#usenavigate
- */
-function useNavigate() {
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of the
-  // router loaded. We can help them understand how to avoid that.
-  "useNavigate() may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  let {
-    basename,
-    navigator
-  } = useContext(NavigationContext);
-  let {
-    matches
-  } = useContext(RouteContext);
-  let {
-    pathname: locationPathname
-  } = useLocation();
-  let routePathnamesJson = JSON.stringify(matches.map(match => match.pathnameBase));
-  let activeRef = useRef(false);
-  useEffect(() => {
-    activeRef.current = true;
-  });
-  let navigate = useCallback(function (to, options) {
-    if (options === void 0) {
-      options = {};
+      assert.equal(options.protocol, protocol, "protocol mismatch");
+      debug("options", options);
+      return new RedirectableRequest(options, callback);
     }
 
-    process.env.NODE_ENV !== "production" ? warning(activeRef.current, "You should call navigate() in a React.useEffect(), not when " + "your component is first rendered.") : void 0;
-    if (!activeRef.current) return;
-
-    if (typeof to === "number") {
-      navigator.go(to);
-      return;
+    // Executes a GET request, following redirects
+    function get(input, options, callback) {
+      var wrappedRequest = wrappedProtocol.request(input, options, callback);
+      wrappedRequest.end();
+      return wrappedRequest;
     }
 
-    let path = resolveTo(to, JSON.parse(routePathnamesJson), locationPathname);
-
-    if (basename !== "/") {
-      path.pathname = joinPaths([basename, path.pathname]);
-    }
-
-    (!!options.replace ? navigator.replace : navigator.push)(path, options.state);
-  }, [basename, navigator, routePathnamesJson, locationPathname]);
-  return navigate;
-}
-const OutletContext = /*#__PURE__*/createContext(null);
-/**
- * Returns the context (if provided) for the child route at this level of the route
- * hierarchy.
- * @see https://reactrouter.com/docs/en/v6/api#useoutletcontext
- */
-
-function useOutletContext() {
-  return useContext(OutletContext);
-}
-/**
- * Returns the element for the child route at this level of the route
- * hierarchy. Used internally by <Outlet> to render child routes.
- *
- * @see https://reactrouter.com/docs/en/v6/api#useoutlet
- */
-
-function useOutlet(context) {
-  let outlet = useContext(RouteContext).outlet;
-
-  if (outlet) {
-    return /*#__PURE__*/createElement(OutletContext.Provider, {
-      value: context
-    }, outlet);
-  }
-
-  return outlet;
-}
-/**
- * Returns an object of key/value pairs of the dynamic params from the current
- * URL that were matched by the route path.
- *
- * @see https://reactrouter.com/docs/en/v6/api#useparams
- */
-
-function useParams() {
-  let {
-    matches
-  } = useContext(RouteContext);
-  let routeMatch = matches[matches.length - 1];
-  return routeMatch ? routeMatch.params : {};
-}
-/**
- * Resolves the pathname of the given `to` value against the current location.
- *
- * @see https://reactrouter.com/docs/en/v6/api#useresolvedpath
- */
-
-function useResolvedPath(to) {
-  let {
-    matches
-  } = useContext(RouteContext);
-  let {
-    pathname: locationPathname
-  } = useLocation();
-  let routePathnamesJson = JSON.stringify(matches.map(match => match.pathnameBase));
-  return useMemo(() => resolveTo(to, JSON.parse(routePathnamesJson), locationPathname), [to, routePathnamesJson, locationPathname]);
-}
-/**
- * Returns the element of the route that matched the current location, prepared
- * with the correct context to render the remainder of the route tree. Route
- * elements in the tree must render an <Outlet> to render their child route's
- * element.
- *
- * @see https://reactrouter.com/docs/en/v6/api#useroutes
- */
-
-function useRoutes(routes, locationArg) {
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of the
-  // router loaded. We can help them understand how to avoid that.
-  "useRoutes() may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  let {
-    matches: parentMatches
-  } = useContext(RouteContext);
-  let routeMatch = parentMatches[parentMatches.length - 1];
-  let parentParams = routeMatch ? routeMatch.params : {};
-  let parentPathname = routeMatch ? routeMatch.pathname : "/";
-  let parentPathnameBase = routeMatch ? routeMatch.pathnameBase : "/";
-  let parentRoute = routeMatch && routeMatch.route;
-
-  if (process.env.NODE_ENV !== "production") {
-    // You won't get a warning about 2 different <Routes> under a <Route>
-    // without a trailing *, but this is a best-effort warning anyway since we
-    // cannot even give the warning unless they land at the parent route.
-    //
-    // Example:
-    //
-    // <Routes>
-    //   {/* This route path MUST end with /* because otherwise
-    //       it will never match /blog/post/123 */}
-    //   <Route path="blog" element={<Blog />} />
-    //   <Route path="blog/feed" element={<BlogFeed />} />
-    // </Routes>
-    //
-    // function Blog() {
-    //   return (
-    //     <Routes>
-    //       <Route path="post/:id" element={<Post />} />
-    //     </Routes>
-    //   );
-    // }
-    let parentPath = parentRoute && parentRoute.path || "";
-    warningOnce(parentPathname, !parentRoute || parentPath.endsWith("*"), "You rendered descendant <Routes> (or called `useRoutes()`) at " + ("\"" + parentPathname + "\" (under <Route path=\"" + parentPath + "\">) but the ") + "parent route path has no trailing \"*\". This means if you navigate " + "deeper, the parent won't match anymore and therefore the child " + "routes will never render.\n\n" + ("Please change the parent <Route path=\"" + parentPath + "\"> to <Route ") + ("path=\"" + (parentPath === "/" ? "*" : parentPath + "/*") + "\">."));
-  }
-
-  let locationFromContext = useLocation();
-  let location;
-
-  if (locationArg) {
-    var _parsedLocationArg$pa;
-
-    let parsedLocationArg = typeof locationArg === "string" ? parsePath(locationArg) : locationArg;
-    !(parentPathnameBase === "/" || ((_parsedLocationArg$pa = parsedLocationArg.pathname) == null ? void 0 : _parsedLocationArg$pa.startsWith(parentPathnameBase))) ? process.env.NODE_ENV !== "production" ? invariant(false, "When overriding the location using `<Routes location>` or `useRoutes(routes, location)`, " + "the location pathname must begin with the portion of the URL pathname that was " + ("matched by all parent routes. The current pathname base is \"" + parentPathnameBase + "\" ") + ("but pathname \"" + parsedLocationArg.pathname + "\" was given in the `location` prop.")) : invariant(false) : void 0;
-    location = parsedLocationArg;
-  } else {
-    location = locationFromContext;
-  }
-
-  let pathname = location.pathname || "/";
-  let remainingPathname = parentPathnameBase === "/" ? pathname : pathname.slice(parentPathnameBase.length) || "/";
-  let matches = matchRoutes(routes, {
-    pathname: remainingPathname
-  });
-
-  if (process.env.NODE_ENV !== "production") {
-    process.env.NODE_ENV !== "production" ? warning(parentRoute || matches != null, "No routes matched location \"" + location.pathname + location.search + location.hash + "\" ") : void 0;
-    process.env.NODE_ENV !== "production" ? warning(matches == null || matches[matches.length - 1].route.element !== undefined, "Matched leaf route at location \"" + location.pathname + location.search + location.hash + "\" does not have an element. " + "This means it will render an <Outlet /> with a null value by default resulting in an \"empty\" page.") : void 0;
-  }
-
-  return _renderMatches(matches && matches.map(match => Object.assign({}, match, {
-    params: Object.assign({}, parentParams, match.params),
-    pathname: joinPaths([parentPathnameBase, match.pathname]),
-    pathnameBase: match.pathnameBase === "/" ? parentPathnameBase : joinPaths([parentPathnameBase, match.pathnameBase])
-  })), parentMatches);
-}
-function _renderMatches(matches, parentMatches) {
-  if (parentMatches === void 0) {
-    parentMatches = [];
-  }
-
-  if (matches == null) return null;
-  return matches.reduceRight((outlet, match, index) => {
-    return /*#__PURE__*/createElement(RouteContext.Provider, {
-      children: match.route.element !== undefined ? match.route.element : outlet,
-      value: {
-        outlet,
-        matches: parentMatches.concat(matches.slice(0, index + 1))
-      }
-    });
-  }, null);
-}
-
-/**
- * A <Router> that stores all entries in memory.
- *
- * @see https://reactrouter.com/docs/en/v6/api#memoryrouter
- */
-function MemoryRouter(_ref) {
-  let {
-    basename,
-    children,
-    initialEntries,
-    initialIndex
-  } = _ref;
-  let historyRef = useRef();
-
-  if (historyRef.current == null) {
-    historyRef.current = createMemoryHistory({
-      initialEntries,
-      initialIndex
-    });
-  }
-
-  let history = historyRef.current;
-  let [state, setState] = useState({
-    action: history.action,
-    location: history.location
-  });
-  useLayoutEffect(() => history.listen(setState), [history]);
-  return /*#__PURE__*/createElement(Router, {
-    basename: basename,
-    children: children,
-    location: state.location,
-    navigationType: state.action,
-    navigator: history
-  });
-}
-
-/**
- * Changes the current location.
- *
- * Note: This API is mostly useful in React.Component subclasses that are not
- * able to use hooks. In functional components, we recommend you use the
- * `useNavigate` hook instead.
- *
- * @see https://reactrouter.com/docs/en/v6/api#navigate
- */
-function Navigate(_ref2) {
-  let {
-    to,
-    replace,
-    state
-  } = _ref2;
-  !useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, // TODO: This error is probably because they somehow have 2 versions of
-  // the router loaded. We can help them understand how to avoid that.
-  "<Navigate> may be used only in the context of a <Router> component.") : invariant(false) : void 0;
-  process.env.NODE_ENV !== "production" ? warning(!useContext(NavigationContext).static, "<Navigate> must not be used on the initial render in a <StaticRouter>. " + "This is a no-op, but you should modify your code so the <Navigate> is " + "only ever rendered in response to some user interaction or state change.") : void 0;
-  let navigate = useNavigate();
-  useEffect(() => {
-    navigate(to, {
-      replace,
-      state
+    // Expose the properties on the wrapped protocol
+    Object.defineProperties(wrappedProtocol, {
+      request: { value: request, configurable: true, enumerable: true, writable: true },
+      get: { value: get, configurable: true, enumerable: true, writable: true },
     });
   });
-  return null;
+  return exports;
 }
 
-/**
- * Renders the child route's element, if there is one.
- *
- * @see https://reactrouter.com/docs/en/v6/api#outlet
- */
-function Outlet(props) {
-  return useOutlet(props.context);
-}
+/* istanbul ignore next */
+function noop() { /* empty */ }
 
-/**
- * Declares an element that should be rendered at a certain URL path.
- *
- * @see https://reactrouter.com/docs/en/v6/api#route
- */
-function Route(_props) {
-   process.env.NODE_ENV !== "production" ? invariant(false, "A <Route> is only ever to be used as the child of <Routes> element, " + "never rendered directly. Please wrap your <Route> in a <Routes>.") : invariant(false) ;
-}
-
-/**
- * Provides location context for the rest of the app.
- *
- * Note: You usually won't render a <Router> directly. Instead, you'll render a
- * router that is more specific to your environment such as a <BrowserRouter>
- * in web browsers or a <StaticRouter> for server rendering.
- *
- * @see https://reactrouter.com/docs/en/v6/api#router
- */
-function Router(_ref3) {
-  let {
-    basename: basenameProp = "/",
-    children = null,
-    location: locationProp,
-    navigationType = Action.Pop,
-    navigator,
-    static: staticProp = false
-  } = _ref3;
-  !!useInRouterContext() ? process.env.NODE_ENV !== "production" ? invariant(false, "You cannot render a <Router> inside another <Router>." + " You should never have more than one in your app.") : invariant(false) : void 0;
-  let basename = normalizePathname(basenameProp);
-  let navigationContext = useMemo(() => ({
-    basename,
-    navigator,
-    static: staticProp
-  }), [basename, navigator, staticProp]);
-
-  if (typeof locationProp === "string") {
-    locationProp = parsePath(locationProp);
+// from https://github.com/nodejs/node/blob/master/lib/internal/url.js
+function urlToOptions(urlObject) {
+  var options = {
+    protocol: urlObject.protocol,
+    hostname: urlObject.hostname.startsWith("[") ?
+      /* istanbul ignore next */
+      urlObject.hostname.slice(1, -1) :
+      urlObject.hostname,
+    hash: urlObject.hash,
+    search: urlObject.search,
+    pathname: urlObject.pathname,
+    path: urlObject.pathname + urlObject.search,
+    href: urlObject.href,
+  };
+  if (urlObject.port !== "") {
+    options.port = Number(urlObject.port);
   }
+  return options;
+}
 
-  let {
-    pathname = "/",
-    search = "",
-    hash = "",
-    state = null,
-    key = "default"
-  } = locationProp;
-  let location = useMemo(() => {
-    let trailingPathname = stripBasename(pathname, basename);
-
-    if (trailingPathname == null) {
-      return null;
+function removeMatchingHeaders(regex, headers) {
+  var lastValue;
+  for (var header in headers) {
+    if (regex.test(header)) {
+      lastValue = headers[header];
+      delete headers[header];
     }
-
-    return {
-      pathname: trailingPathname,
-      search,
-      hash,
-      state,
-      key
-    };
-  }, [basename, pathname, search, hash, state, key]);
-  process.env.NODE_ENV !== "production" ? warning(location != null, "<Router basename=\"" + basename + "\"> is not able to match the URL " + ("\"" + pathname + search + hash + "\" because it does not start with the ") + "basename, so the <Router> won't render anything.") : void 0;
-
-  if (location == null) {
-    return null;
   }
-
-  return /*#__PURE__*/createElement(NavigationContext.Provider, {
-    value: navigationContext
-  }, /*#__PURE__*/createElement(LocationContext.Provider, {
-    children: children,
-    value: {
-      location,
-      navigationType
-    }
-  }));
+  return (lastValue === null || typeof lastValue === "undefined") ?
+    undefined : String(lastValue).trim();
 }
 
-/**
- * A container for a nested tree of <Route> elements that renders the branch
- * that best matches the current location.
- *
- * @see https://reactrouter.com/docs/en/v6/api#routes
- */
-function Routes(_ref4) {
-  let {
-    children,
-    location
-  } = _ref4;
-  return useRoutes(createRoutesFromChildren(children), location);
-} ///////////////////////////////////////////////////////////////////////////////
-// UTILS
-///////////////////////////////////////////////////////////////////////////////
-
-/**
- * Creates a route config from a React "children" object, which is usually
- * either a `<Route>` element or an array of them. Used internally by
- * `<Routes>` to create a route config from its children.
- *
- * @see https://reactrouter.com/docs/en/v6/api#createroutesfromchildren
- */
-
-function createRoutesFromChildren(children) {
-  let routes = [];
-  Children.forEach(children, element => {
-    if (! /*#__PURE__*/isValidElement(element)) {
-      // Ignore non-elements. This allows people to more easily inline
-      // conditionals in their route config.
-      return;
+function createErrorType(code, defaultMessage) {
+  function CustomError(cause) {
+    Error.captureStackTrace(this, this.constructor);
+    if (!cause) {
+      this.message = defaultMessage;
     }
-
-    if (element.type === Fragment) {
-      // Transparently support React.Fragment and its children.
-      routes.push.apply(routes, createRoutesFromChildren(element.props.children));
-      return;
+    else {
+      this.message = defaultMessage + ": " + cause.message;
+      this.cause = cause;
     }
-
-    !(element.type === Route) ? process.env.NODE_ENV !== "production" ? invariant(false, "[" + (typeof element.type === "string" ? element.type : element.type.name) + "] is not a <Route> component. All component children of <Routes> must be a <Route> or <React.Fragment>") : invariant(false) : void 0;
-    let route = {
-      caseSensitive: element.props.caseSensitive,
-      element: element.props.element,
-      index: element.props.index,
-      path: element.props.path
-    };
-
-    if (element.props.children) {
-      route.children = createRoutesFromChildren(element.props.children);
-    }
-
-    routes.push(route);
-  });
-  return routes;
-}
-/**
- * Renders the result of `matchRoutes()` into a React element.
- */
-
-function renderMatches(matches) {
-  return _renderMatches(matches);
+  }
+  CustomError.prototype = new Error();
+  CustomError.prototype.constructor = CustomError;
+  CustomError.prototype.name = "Error [" + code + "]";
+  CustomError.prototype.code = code;
+  return CustomError;
 }
 
-export { MemoryRouter, Navigate, Outlet, Route, Router, Routes, LocationContext as UNSAFE_LocationContext, NavigationContext as UNSAFE_NavigationContext, RouteContext as UNSAFE_RouteContext, createRoutesFromChildren, generatePath, matchPath, matchRoutes, renderMatches, resolvePath, useHref, useInRouterContext, useLocation, useMatch, useNavigate, useNavigationType, useOutlet, useOutletContext, useParams, useResolvedPath, useRoutes };
-//# sourceMappingURL=index.js.map
+function abortRequest(request) {
+  for (var e = 0; e < events.length; e++) {
+    request.removeListener(events[e], eventHandlers[events[e]]);
+  }
+  request.on("error", noop);
+  request.abort();
+}
+
+function isSubdomain(subdomain, domain) {
+  const dot = subdomain.length - domain.length - 1;
+  return dot > 0 && subdomain[dot] === "." && subdomain.endsWith(domain);
+}
+
+// Exports
+module.exports = wrap({ http: http, https: https });
+module.exports.wrap = wrap;
