@@ -1,47 +1,63 @@
 {
-  "_from": "regenerator-runtime@^0.13.4",
-  "_id": "regenerator-runtime@0.13.9",
+  "_from": "react-router@6.3.0",
+  "_id": "react-router@6.3.0",
   "_inBundle": false,
-  "_integrity": "sha512-p3VT+cOEgxFsRRA9X4lkI1E+k2/CtnKtU4gcxyaCUreilL/vqI6CdZ3wxVUx3UOUg+gnUOQQcRI7BmSI656MYA==",
-  "_location": "/regenerator-runtime",
+  "_integrity": "sha512-7Wh1DzVQ+tlFjkeo+ujvjSqSJmkt1+8JO+T5xklPlgrh70y7ogx75ODRW0ThWhY7S+6yEDks8TYrtQe/aoboBQ==",
+  "_location": "/react-router",
   "_phantomChildren": {},
   "_requested": {
-    "type": "range",
+    "type": "version",
     "registry": true,
-    "raw": "regenerator-runtime@^0.13.4",
-    "name": "regenerator-runtime",
-    "escapedName": "regenerator-runtime",
-    "rawSpec": "^0.13.4",
+    "raw": "react-router@6.3.0",
+    "name": "react-router",
+    "escapedName": "react-router",
+    "rawSpec": "6.3.0",
     "saveSpec": null,
-    "fetchSpec": "^0.13.4"
+    "fetchSpec": "6.3.0"
   },
   "_requiredBy": [
-    "/@babel/runtime"
+    "/react-router-dom"
   ],
-  "_resolved": "https://registry.npmjs.org/regenerator-runtime/-/regenerator-runtime-0.13.9.tgz",
-  "_shasum": "8925742a98ffd90814988d7566ad30ca3b263b52",
-  "_spec": "regenerator-runtime@^0.13.4",
-  "_where": "C:\\Users\\Aaru\\Dropbox\\My PC (LAPTOP-EJG84MCS)\\Desktop\\Work Space\\Blockchain Development\\node_modules\\@babel\\runtime",
+  "_resolved": "https://registry.npmjs.org/react-router/-/react-router-6.3.0.tgz",
+  "_shasum": "3970cc64b4cb4eae0c1ea5203a80334fdd175557",
+  "_spec": "react-router@6.3.0",
+  "_where": "C:\\Users\\Aaru\\Dropbox\\My PC (LAPTOP-EJG84MCS)\\Desktop\\Work Space\\Blockchain Development\\node_modules\\react-router-dom",
   "author": {
-    "name": "Ben Newman",
-    "email": "bn@cs.stanford.edu"
+    "name": "Remix Software",
+    "email": "hello@remix.run"
+  },
+  "bugs": {
+    "url": "https://github.com/remix-run/react-router/issues"
   },
   "bundleDependencies": false,
+  "dependencies": {
+    "history": "^5.2.0"
+  },
   "deprecated": false,
-  "description": "Runtime for Regenerator-compiled generator and async functions.",
+  "description": "Declarative routing for React",
+  "homepage": "https://github.com/remix-run/react-router#readme",
   "keywords": [
-    "regenerator",
-    "runtime",
-    "generator",
-    "async"
+    "react",
+    "router",
+    "route",
+    "routing",
+    "history",
+    "link"
   ],
   "license": "MIT",
-  "main": "runtime.js",
-  "name": "regenerator-runtime",
+  "main": "./main.js",
+  "module": "./index.js",
+  "name": "react-router",
+  "peerDependencies": {
+    "react": ">=16.8"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/facebook/regenerator/tree/master/packages/runtime"
+    "url": "git+https://github.com/remix-run/react-router.git",
+    "directory": "packages/react-router"
   },
-  "sideEffects": true,
-  "version": "0.13.9"
+  "sideEffects": false,
+  "types": "./index.d.ts",
+  "unpkg": "./umd/react-router.production.min.js",
+  "version": "6.3.0"
 }
